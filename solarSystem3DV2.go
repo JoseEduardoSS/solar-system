@@ -66,14 +66,22 @@ type Simulation struct {
 	Asteroids []Asteroid // Inclui cinturão principal e o Kuiper Belt
 	Comet     Comet
 	Time      float64
+
+	// Campos para o efeito de explosão (impacto)
+	ExplosionActive   bool
+	ExplosionTime     float64
+	ExplosionDuration float64
+	ExplosionPosition rl.Vector3
 }
 
 // NewSimulation cria e inicializa os corpos celestes
 func NewSimulation() *Simulation {
 	sim := &Simulation{
-		SunRadius: 40,
-		Planets:   make([]*Planet, 0),
-		Time:      0,
+		SunRadius:         40,
+		Planets:           make([]*Planet, 0),
+		Time:              0,
+		ExplosionActive:   false,
+		ExplosionDuration: 1.0, // duração da explosão em segundos
 	}
 
 	// Planetas – cada um com seus parâmetros
@@ -227,21 +235,75 @@ func NewSimulation() *Simulation {
 		})
 	}
 
-	// Cometa (com rastro)
-	sim.Comet = Comet{
-		Position:      rl.NewVector3(-50, 0, -50),
-		Angle:         math.Pi / 4,
-		Speed:         4.0,
-		TailPoints:    make([]rl.Vector3, 0),
-		TailMaxLength: 20,
-	}
+	// Inicializa o cometa com posição e direção aleatórias (na periferia)
+	resetComet(sim)
 
 	rand.Seed(time.Now().UnixNano())
 	return sim
 }
 
+// resetComet define uma nova posição e direção para o cometa.
+// O cometa é posicionado aleatoriamente em um anel na região externa (raio entre 600 e 1000)
+// e sua direção é calculada para apontar aproximadamente para o centro (0,0,0).
+func resetComet(sim *Simulation) {
+	rMin, rMax := 600.0, 1000.0
+	radius := rMin + rand.Float64()*(rMax-rMin)
+	angle := rand.Float64() * 2 * math.Pi
+	sim.Comet.Position = rl.NewVector3(float32(radius*math.Cos(angle)), 0, float32(radius*math.Sin(angle)))
+	// Direção para o centro
+	sim.Comet.Angle = math.Atan2(-float64(sim.Comet.Position.Z), -float64(sim.Comet.Position.X))
+	sim.Comet.Speed = 4.0
+	sim.Comet.TailPoints = make([]rl.Vector3, 0)
+}
+
+// distance retorna a distância Euclidiana entre dois pontos 3D.
+func distance(v1, v2 rl.Vector3) float32 {
+	dx := v1.X - v2.X
+	dy := v1.Y - v2.Y
+	dz := v1.Z - v2.Z
+	return float32(math.Sqrt(float64(dx*dx + dy*dy + dz*dz)))
+}
+
+// CheckCollisions verifica se o cometa colide com algum objeto (planeta ou asteroide)
+// (exceto o Sol). Se houver colisão, ativa um efeito de explosão e reinicia o cometa.
+func (sim *Simulation) CheckCollisions() {
+	cometRadius := float32(4)
+	// Colisão com planetas
+	for _, p := range sim.Planets {
+		planetPos := rl.NewVector3(
+			float32(p.OrbitRadius*math.Cos(p.Angle)),
+			0,
+			float32(p.OrbitRadius*math.Sin(p.Angle)),
+		)
+		if distance(sim.Comet.Position, planetPos) < (cometRadius + p.Radius) {
+			sim.ExplosionActive = true
+			sim.ExplosionTime = 0
+			sim.ExplosionPosition = sim.Comet.Position
+			resetComet(sim)
+			return
+		}
+	}
+	// Colisão com asteroides
+	for i := range sim.Asteroids {
+		a := &sim.Asteroids[i]
+		asteroidPos := rl.NewVector3(
+			float32(a.OrbitRadius*math.Cos(a.Angle)),
+			0,
+			float32(a.OrbitRadius*math.Sin(a.Angle)),
+		)
+		if distance(sim.Comet.Position, asteroidPos) < (cometRadius + a.Radius) {
+			sim.ExplosionActive = true
+			sim.ExplosionTime = 0
+			sim.ExplosionPosition = sim.Comet.Position
+			resetComet(sim)
+			return
+		}
+	}
+}
+
 func (sim *Simulation) Update() {
-	sim.Time += 1.0 / 60.0
+	dt := 1.0 / 60.0
+	sim.Time += dt
 
 	// Atualiza as fases das estrelas (cintilação)
 	for i := range sim.Stars {
@@ -253,16 +315,17 @@ func (sim *Simulation) Update() {
 		sim.Asteroids[i].Angle += sim.Asteroids[i].OrbitSpeed
 	}
 
-	// Atualiza posição e rastro do cometa
+	// Atualiza a posição e o rastro do cometa
 	sim.Comet.Position.X += float32(sim.Comet.Speed * math.Cos(sim.Comet.Angle))
 	sim.Comet.Position.Z += float32(sim.Comet.Speed * math.Sin(sim.Comet.Angle))
+	// Atualiza o rastro: adiciona a posição atual no início da lista
 	sim.Comet.TailPoints = append([]rl.Vector3{sim.Comet.Position}, sim.Comet.TailPoints...)
 	if len(sim.Comet.TailPoints) > sim.Comet.TailMaxLength {
 		sim.Comet.TailPoints = sim.Comet.TailPoints[:sim.Comet.TailMaxLength]
 	}
+	// Se o cometa sair da região, reinicia
 	if sim.Comet.Position.X > 800 || sim.Comet.Position.Z > 800 {
-		sim.Comet.Position = rl.NewVector3(-50, 0, -50)
-		sim.Comet.TailPoints = sim.Comet.TailPoints[:0]
+		resetComet(sim)
 	}
 
 	// Atualiza os ângulos dos planetas e suas luas
@@ -270,6 +333,17 @@ func (sim *Simulation) Update() {
 		p.Angle += p.OrbitSpeed
 		for _, m := range p.Moons {
 			m.Angle += m.OrbitSpeed
+		}
+	}
+
+	// Verifica colisões e dispara explosão se necessário
+	sim.CheckCollisions()
+
+	// Atualiza o tempo da explosão, se ativo
+	if sim.ExplosionActive {
+		sim.ExplosionTime += dt
+		if sim.ExplosionTime >= sim.ExplosionDuration {
+			sim.ExplosionActive = false
 		}
 	}
 }
@@ -292,18 +366,16 @@ func generateRingMesh(innerRadius, outerRadius float32, segments int) rl.Mesh {
 	vertexCount := segments * 2
 	triangleCount := segments * 2
 
-	vertices := make([]float32, vertexCount*3)  // x, y, z de cada vértice
-	normals := make([]float32, vertexCount*3)   // normais
-	texcoords := make([]float32, vertexCount*2) // u, v
+	vertices := make([]float32, vertexCount*3)
+	normals := make([]float32, vertexCount*3)
+	texcoords := make([]float32, vertexCount*2)
 	indices := make([]uint16, triangleCount*3)
 
 	angleStep := 2 * math.Pi / float64(segments)
-	vertexIndex := 0
-	texIndex := 0
+	vertexIndex, texIndex := 0, 0
 	for i := 0; i < segments; i++ {
 		angle := float64(i) * angleStep
-		cosA := float32(math.Cos(angle))
-		sinA := float32(math.Sin(angle))
+		cosA, sinA := float32(math.Cos(angle)), float32(math.Sin(angle))
 		// Vértice externo
 		vertices[vertexIndex] = outerRadius * cosA
 		vertices[vertexIndex+1] = 0
@@ -313,7 +385,6 @@ func generateRingMesh(innerRadius, outerRadius float32, segments int) rl.Mesh {
 		normals[vertexIndex+2] = 0
 		texcoords[texIndex] = (cosA + 1) * 0.5
 		texcoords[texIndex+1] = (sinA + 1) * 0.5
-
 		vertexIndex += 3
 		texIndex += 2
 
@@ -326,7 +397,6 @@ func generateRingMesh(innerRadius, outerRadius float32, segments int) rl.Mesh {
 		normals[vertexIndex+2] = 0
 		texcoords[texIndex] = (cosA + 1) * 0.5
 		texcoords[texIndex+1] = (sinA + 1) * 0.5
-
 		vertexIndex += 3
 		texIndex += 2
 	}
@@ -341,24 +411,22 @@ func generateRingMesh(innerRadius, outerRadius float32, segments int) rl.Mesh {
 		indices[index] = vi0
 		indices[index+1] = vi2
 		indices[index+2] = vi1
-
 		indices[index+3] = vi1
 		indices[index+4] = vi2
 		indices[index+5] = vi3
 		index += 6
 	}
 
-	mesh := rl.Mesh{
+	return rl.Mesh{
 		VertexCount: int32(vertexCount),
 		Vertices:    &vertices[0],
 		Normals:     &normals[0],
 		Texcoords:   &texcoords[0],
 		Indices:     &indices[0],
 	}
-	return mesh
 }
 
-// Desenha a cena 3D usando as funções nativas (esferas e o modelo do anel)
+// Desenha a cena 3D usando as funções nativas (esferas, modelo do anel e efeitos)
 func (sim *Simulation) Draw3D(ringModel rl.Model) {
 	// Desenha o Sol
 	drawSphere(rl.NewVector3(0, 0, 0), sim.SunRadius, rl.Yellow)
@@ -394,14 +462,21 @@ func (sim *Simulation) Draw3D(ringModel rl.Model) {
 		drawSphere(asteroidPos, a.Radius, rl.Gray)
 	}
 
-	// Desenha o rastro do cometa
+	// Desenha o rastro do cometa (meteoro)
+	// Primeiro, desenha esferas com alfa decrescente
 	for i := 0; i < len(sim.Comet.TailPoints)-1; i++ {
 		alpha := uint8(200 * (1 - float32(i)/float32(len(sim.Comet.TailPoints))))
 		col := rl.NewColor(255, 255, 255, alpha)
 		drawSphere(sim.Comet.TailPoints[i], 2, col)
 	}
+	// Em seguida, desenha linhas conectando os pontos do rastro para um efeito contínuo
+	for i := 0; i < len(sim.Comet.TailPoints)-1; i++ {
+		alpha := uint8(200 * (1 - float32(i)/float32(len(sim.Comet.TailPoints))))
+		col := rl.NewColor(255, 255, 255, alpha)
+		rl.DrawLine3D(sim.Comet.TailPoints[i], sim.Comet.TailPoints[i+1], col)
+	}
 
-	// Desenha o cometa
+	// Desenha o cometa (meteoro)
 	drawSphere(sim.Comet.Position, 4, rl.White)
 
 	// Desenha as estrelas cintilantes
@@ -415,13 +490,22 @@ func (sim *Simulation) Draw3D(ringModel rl.Model) {
 		col := rl.NewColor(255, 255, 255, uint8(brightness))
 		drawSphere(star.Position, 1, col)
 	}
+
+	// Se uma explosão estiver ativa, desenha o efeito de explosão
+	if sim.ExplosionActive {
+		maxExplosionRadius := float32(30)
+		explosionRadius := float32(sim.ExplosionTime/sim.ExplosionDuration) * maxExplosionRadius
+		alpha := uint8(255 * (1 - float32(sim.ExplosionTime)/float32(sim.ExplosionDuration)))
+		explosionColor := rl.NewColor(255, 200, 0, alpha)
+		rl.DrawSphere(sim.ExplosionPosition, explosionRadius, explosionColor)
+	}
 }
 
 func main() {
 	// Configurações da janela
 	screenWidth := int32(1280)
 	screenHeight := int32(720)
-	rl.InitWindow(screenWidth, screenHeight, "Simulação 3D Realista do Sistema Solar - Câmeras Avançadas")
+	rl.InitWindow(screenWidth, screenHeight, "Simulação 3D Realista do Sistema Solar - Câmeras, Física & Colisões")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 
@@ -453,26 +537,24 @@ func main() {
 	for !rl.WindowShouldClose() {
 		sim.Update()
 
-		// Se a tecla P for pressionada, alterna o modo Top View
+		// Alterna entre o modo Top View e o normal ao pressionar a tecla P.
+		// No modo Top View, a câmera fica fixa, sem reagir ao mouse.
 		if rl.IsKeyPressed(rl.KeyP) {
 			if !topViewEnabled {
-				// Ativa o modo Top View: salva o estado da câmera normal e configura a visão de cima
 				normalCamera = camera
 				camera.Position = rl.NewVector3(0, 800, 0)
 				camera.Target = rl.NewVector3(0, 0, 0)
-				// Define um vetor Up que não interfira com a direção de visão
 				camera.Up = rl.NewVector3(0, 0, -1)
 				camera.Projection = rl.CameraPerspective
 				camera.Fovy = 45
 				topViewEnabled = true
 			} else {
-				// Desativa o modo Top View: restaura o estado salvo da câmera normal
 				topViewEnabled = false
 				camera = normalCamera
 			}
 		}
 
-		// Se não estiver no modo Top View, atualiza a câmera com base nas entradas do usuário
+		// Se não estiver no modo Top View, atualiza a câmera com base nas entradas do usuário.
 		if !topViewEnabled {
 			if rl.IsKeyPressed(rl.KeyOne) {
 				currentCameraMode = CameraOrbital
