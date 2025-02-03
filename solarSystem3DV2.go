@@ -8,12 +8,17 @@ import (
 	rl "github.com/gen2brain/raylib-go/raylib"
 )
 
-// -----------------------------------------------------
-// Definições básicas e a cor Silver (rl.Silver não existe)
+// Definição de uma cor Silver (já que rl.Silver não está definida)
 var Silver = rl.NewColor(192, 192, 192, 255)
 
-// -----------------------------------------------------
-// Estruturas da simulação (mantêm a lógica já existente)
+// Definindo constantes para os modos de câmera (para os modos "normais")
+const (
+	CameraFree    = 1 // Modo livre (free)
+	CameraOrbital = 2 // Modo orbital
+)
+
+// ─────────────────────────────────────────────
+// Estruturas da simulação
 type Star struct {
 	Position       rl.Vector3
 	Phase          float64
@@ -61,17 +66,14 @@ type Simulation struct {
 	Asteroids []Asteroid // Inclui cinturão principal e o Kuiper Belt
 	Comet     Comet
 	Time      float64
-	CamAngle  float64 // Para movimentação dinâmica da câmera
 }
 
-// -----------------------------------------------------
 // NewSimulation cria e inicializa os corpos celestes
 func NewSimulation() *Simulation {
 	sim := &Simulation{
 		SunRadius: 40,
 		Planets:   make([]*Planet, 0),
 		Time:      0,
-		CamAngle:  0,
 	}
 
 	// Planetas – cada um com seus parâmetros
@@ -117,7 +119,7 @@ func NewSimulation() *Simulation {
 		OrbitSpeed:  0.015,
 		Color:       rl.Red,
 	})
-	// Jupiter com múltiplas luas para enriquecer a cena
+	// Jupiter com múltiplas luas
 	jupiter := &Planet{
 		Name:        "Jupiter",
 		OrbitRadius: 250,
@@ -183,7 +185,7 @@ func NewSimulation() *Simulation {
 		Color:       rl.Brown,
 	})
 
-	// Estrelas distribuídas numa casca esférica
+	// Estrelas distribuídas numa casca esférica distante
 	starCount := 200
 	sim.Stars = make([]Star, starCount)
 	for i := 0; i < starCount; i++ {
@@ -213,6 +215,7 @@ func NewSimulation() *Simulation {
 			Radius:      1 + float32(rand.Float64()*1.5),
 		})
 	}
+	// Kuiper Belt
 	kuiperCount := 50
 	for i := 0; i < kuiperCount; i++ {
 		orbitRadius := 500 + rand.Float64()*100
@@ -237,17 +240,15 @@ func NewSimulation() *Simulation {
 	return sim
 }
 
-// -----------------------------------------------------
-// Update: atualiza a simulação (movimentos, ângulos, etc.)
 func (sim *Simulation) Update() {
 	sim.Time += 1.0 / 60.0
 
-	// Atualiza cintilação das estrelas
+	// Atualiza as fases das estrelas (cintilação)
 	for i := range sim.Stars {
 		sim.Stars[i].Phase += sim.Stars[i].Speed
 	}
 
-	// Atualiza ângulos dos asteroides
+	// Atualiza os ângulos dos asteroides
 	for i := range sim.Asteroids {
 		sim.Asteroids[i].Angle += sim.Asteroids[i].OrbitSpeed
 	}
@@ -264,20 +265,16 @@ func (sim *Simulation) Update() {
 		sim.Comet.TailPoints = sim.Comet.TailPoints[:0]
 	}
 
-	// Atualiza ângulos dos planetas e suas luas
+	// Atualiza os ângulos dos planetas e suas luas
 	for _, p := range sim.Planets {
 		p.Angle += p.OrbitSpeed
 		for _, m := range p.Moons {
 			m.Angle += m.OrbitSpeed
 		}
 	}
-
-	// Movimento orbital suave da câmera
-	sim.CamAngle += 0.001
 }
 
-// -----------------------------------------------------
-// DrawOrbitPaths: desenha as órbitas dos planetas (no plano XZ)
+// Desenha as órbitas dos planetas (no plano XZ)
 func (sim *Simulation) DrawOrbitPaths() {
 	center := rl.NewVector3(0, 0, 0)
 	for _, p := range sim.Planets {
@@ -285,146 +282,28 @@ func (sim *Simulation) DrawOrbitPaths() {
 	}
 }
 
-// -----------------------------------------------------
-// Shaders Avançados
-// 1. Depth Shader (para gerar o shadow map)
-// --- Usamos "mvp" para que o Raylib envie a matriz automaticamente ---
-const depthVertexShaderSource = `#version 330
-in vec3 vertexPosition;
-uniform mat4 mvp;
-void main() {
-    gl_Position = mvp * vec4(vertexPosition, 1.0);
-}`
-
-const depthFragmentShaderSource = `#version 330
-void main() {
-    float depth = gl_FragCoord.z;
-    gl_FragColor = vec4(depth, depth, depth, 1.0);
-}`
-
-// 2. Main Shader com Shadow Mapping
-const mainVertexShaderSource = `#version 330
-in vec3 vertexPosition;
-in vec3 vertexNormal;
-uniform mat4 mvp;
-uniform mat4 matModel;
-out vec3 fragPos;
-out vec3 normal;
-void main() {
-    vec4 worldPos = matModel * vec4(vertexPosition, 1.0);
-    fragPos = worldPos.xyz;
-    normal = mat3(transpose(inverse(matModel))) * vertexNormal;
-    gl_Position = mvp * worldPos;
-}`
-
-const mainFragmentShaderSource = `#version 330
-in vec3 fragPos;
-in vec3 normal;
-uniform vec3 lightPos;
-uniform vec3 lightColor;
-uniform vec3 ambient;
-uniform vec3 viewPos;
-uniform float shininess;
-uniform vec3 objectColor;
-uniform sampler2D shadowMap;
-uniform mat4 lightSpaceMatrix;
-out vec4 finalColor;
-
-float ShadowCalculation(vec4 fragPosLightSpace) {
-    vec3 projCoords = fragPosLightSpace.xyz / fragPosLightSpace.w;
-    projCoords = projCoords * 0.5 + 0.5;
-    float closestDepth = texture(shadowMap, projCoords.xy).r;
-    float currentDepth = projCoords.z;
-    float bias = 0.005;
-    float shadow = currentDepth - bias > closestDepth ? 0.5 : 0.0;
-    return shadow;
+// Função auxiliar para desenhar uma esfera (usando a função nativa)
+func drawSphere(pos rl.Vector3, radius float32, col rl.Color) {
+	rl.DrawSphere(pos, radius, col)
 }
 
-void main() {
-    vec3 ambientComponent = ambient * objectColor;
-
-    vec3 norm = normalize(normal);
-    vec3 lightDir = normalize(lightPos - fragPos);
-
-    float diff = max(dot(norm, lightDir), 0.0);
-    vec3 diffuse = diff * lightColor * objectColor;
-
-    vec3 viewDir = normalize(viewPos - fragPos);
-    vec3 reflectDir = reflect(-lightDir, norm);
-    float spec = pow(max(dot(viewDir, reflectDir), 0.0), shininess);
-    vec3 specular = spec * lightColor;
-
-    vec4 fragPosLightSpace = lightSpaceMatrix * vec4(fragPos, 1.0);
-    float shadow = ShadowCalculation(fragPosLightSpace);
-
-    vec3 lighting = ambientComponent + (1.0 - shadow) * (diffuse + specular);
-    finalColor = vec4(lighting, 1.0);
-}`
-
-// 3. Post-Processing Shader (tone mapping/HDR simplificado)
-const postProcessVertexShaderSource = `#version 330
-in vec2 vertexPosition;
-in vec2 vertexTexCoord;
-out vec2 texCoord;
-void main() {
-    texCoord = vertexTexCoord;
-    gl_Position = vec4(vertexPosition, 0.0, 1.0);
-}`
-
-const postProcessFragmentShaderSource = `#version 330
-in vec2 texCoord;
-uniform sampler2D sceneTexture;
-uniform float exposure;
-out vec4 finalColor;
-
-void main() {
-    vec3 hdrColor = texture(sceneTexture, texCoord).rgb;
-    // Aplicando exposição básica
-    hdrColor *= exposure;
-
-    // Tone mapping simples
-    vec3 mapped = hdrColor / (hdrColor + vec3(1.0));
-    // Correção gamma ~2.2
-    mapped = pow(mapped, vec3(1.0/2.2));
-    finalColor = vec4(mapped, 1.0);
-}`
-
-// -----------------------------------------------------
-// Função para desenhar uma esfera com shader
-func drawLitSphere(model rl.Model, shader rl.Shader, pos rl.Vector3, radius float32, col rl.Color) {
-	// Força o uso do shader passado, sobrescrevendo o shader armazenado no material
-	model.Materials.Shader = shader
-
-	objColor := []float32{
-		float32(col.R) / 255.0,
-		float32(col.G) / 255.0,
-		float32(col.B) / 255.0,
-	}
-	rl.SetShaderValue(shader, rl.GetShaderLocation(shader, "objectColor"), objColor, rl.ShaderUniformVec3)
-
-	rl.DrawModelEx(model, pos, rl.NewVector3(0, 1, 0), 0, rl.NewVector3(radius, radius, radius), rl.White)
-}
-
-// -----------------------------------------------------
-// Gera um mesh para um anel (para Saturn – no plano XZ)
+// Gera um mesh para um anel (para Saturno – no plano XZ)
 func generateRingMesh(innerRadius, outerRadius float32, segments int) rl.Mesh {
 	vertexCount := segments * 2
 	triangleCount := segments * 2
 
-	vertices := make([]float32, vertexCount*3)
-	normals := make([]float32, vertexCount*3)
-	texcoords := make([]float32, vertexCount*2)
+	vertices := make([]float32, vertexCount*3)  // x, y, z de cada vértice
+	normals := make([]float32, vertexCount*3)   // normais
+	texcoords := make([]float32, vertexCount*2) // u, v
 	indices := make([]uint16, triangleCount*3)
 
 	angleStep := 2 * math.Pi / float64(segments)
 	vertexIndex := 0
 	texIndex := 0
-
 	for i := 0; i < segments; i++ {
 		angle := float64(i) * angleStep
 		cosA := float32(math.Cos(angle))
 		sinA := float32(math.Sin(angle))
-
 		// Vértice externo
 		vertices[vertexIndex] = outerRadius * cosA
 		vertices[vertexIndex+1] = 0
@@ -459,7 +338,6 @@ func generateRingMesh(innerRadius, outerRadius float32, segments int) rl.Mesh {
 		vi1 := uint16(i*2 + 1)
 		vi2 := uint16(next * 2)
 		vi3 := uint16(next*2 + 1)
-
 		indices[index] = vi0
 		indices[index+1] = vi2
 		indices[index+2] = vi1
@@ -467,76 +345,66 @@ func generateRingMesh(innerRadius, outerRadius float32, segments int) rl.Mesh {
 		indices[index+3] = vi1
 		indices[index+4] = vi2
 		indices[index+5] = vi3
-
 		index += 6
 	}
 
 	mesh := rl.Mesh{
-		VertexCount:   int32(vertexCount),
-		TriangleCount: int32(triangleCount), // Importante definir!
-		Vertices:      &vertices[0],
-		Normals:       &normals[0],
-		Texcoords:     &texcoords[0],
-		Indices:       &indices[0],
+		VertexCount: int32(vertexCount),
+		Vertices:    &vertices[0],
+		Normals:     &normals[0],
+		Texcoords:   &texcoords[0],
+		Indices:     &indices[0],
 	}
 	return mesh
 }
 
-// -----------------------------------------------------
-// DrawScene: desenha toda a cena usando o shader fornecido (é chamado em cada pass)
-func (sim *Simulation) DrawScene(sphereModel, ringModel rl.Model, shader rl.Shader) {
+// Desenha a cena 3D usando as funções nativas (esferas e o modelo do anel)
+func (sim *Simulation) Draw3D(ringModel rl.Model) {
 	// Desenha o Sol
-	drawLitSphere(sphereModel, shader, rl.NewVector3(0, 0, 0), sim.SunRadius, rl.Yellow)
+	drawSphere(rl.NewVector3(0, 0, 0), sim.SunRadius, rl.Yellow)
 
-	// Desenha as órbitas
+	// Desenha as órbitas dos planetas
 	sim.DrawOrbitPaths()
 
-	// Desenha planetas, luas, asteroides, cometa e estrelas
+	// Desenha os planetas e suas luas
 	for _, p := range sim.Planets {
 		x := float32(p.OrbitRadius * math.Cos(p.Angle))
 		z := float32(p.OrbitRadius * math.Sin(p.Angle))
 		planetPos := rl.NewVector3(x, 0, z)
-		drawLitSphere(sphereModel, shader, planetPos, p.Radius, p.Color)
+		drawSphere(planetPos, p.Radius, p.Color)
 
-		// Anel de Saturn
+		// Se for Saturn, desenha os anéis
 		if p.Name == "Saturn" {
-			ringModel.Materials.Shader = shader
-			rl.DrawModelEx(
-				ringModel,
-				planetPos,
-				rl.NewVector3(1, 0, 0),
-				25,
-				rl.NewVector3(p.Radius*3, 1, p.Radius*3),
-				rl.LightGray,
-			)
+			rl.DrawModelEx(ringModel, planetPos, rl.NewVector3(1, 0, 0), 25, rl.NewVector3(p.Radius*3, 1, p.Radius*3), rl.LightGray)
 		}
-
-		// Luas
+		// Desenha as luas
 		for _, m := range p.Moons {
 			mx := planetPos.X + float32(m.OrbitRadius*math.Cos(m.Angle))
 			mz := planetPos.Z + float32(m.OrbitRadius*math.Sin(m.Angle))
 			moonPos := rl.NewVector3(mx, 0, mz)
-			drawLitSphere(sphereModel, shader, moonPos, m.Radius, m.Color)
+			drawSphere(moonPos, m.Radius, m.Color)
 		}
 	}
 
-	// Asteroides
+	// Desenha os asteroides
 	for _, a := range sim.Asteroids {
 		ax := float32(a.OrbitRadius * math.Cos(a.Angle))
 		az := float32(a.OrbitRadius * math.Sin(a.Angle))
 		asteroidPos := rl.NewVector3(ax, 0, az)
-		drawLitSphere(sphereModel, shader, asteroidPos, a.Radius, rl.Gray)
+		drawSphere(asteroidPos, a.Radius, rl.Gray)
 	}
 
-	// Cometa + rastro
+	// Desenha o rastro do cometa
 	for i := 0; i < len(sim.Comet.TailPoints)-1; i++ {
 		alpha := uint8(200 * (1 - float32(i)/float32(len(sim.Comet.TailPoints))))
 		col := rl.NewColor(255, 255, 255, alpha)
-		drawLitSphere(sphereModel, shader, sim.Comet.TailPoints[i], 2, col)
+		drawSphere(sim.Comet.TailPoints[i], 2, col)
 	}
-	drawLitSphere(sphereModel, shader, sim.Comet.Position, 4, rl.White)
 
-	// Estrelas
+	// Desenha o cometa
+	drawSphere(sim.Comet.Position, 4, rl.White)
+
+	// Desenha as estrelas cintilantes
 	for _, star := range sim.Stars {
 		brightness := float32(128 + 127*math.Sin(star.Phase))
 		if brightness < 0 {
@@ -545,22 +413,19 @@ func (sim *Simulation) DrawScene(sphereModel, ringModel rl.Model, shader rl.Shad
 			brightness = 255
 		}
 		col := rl.NewColor(255, 255, 255, uint8(brightness))
-		drawLitSphere(sphereModel, shader, star.Position, 1, col)
+		drawSphere(star.Position, 1, col)
 	}
 }
 
-// -----------------------------------------------------
-// MAIN
 func main() {
 	// Configurações da janela
 	screenWidth := int32(1280)
 	screenHeight := int32(720)
-	rl.SetConfigFlags(32) // FLAG_MSAA_4X, por exemplo
-	rl.InitWindow(screenWidth, screenHeight, "Simulação 3D Grandiosa do Sistema Solar")
+	rl.InitWindow(screenWidth, screenHeight, "Simulação 3D Realista do Sistema Solar - Câmeras Avançadas")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
 
-	// Cria a câmera 3D
+	// Cria a câmera 3D com parâmetros iniciais (modo normal)
 	camera := rl.Camera3D{
 		Position:   rl.NewVector3(0, 300, 600),
 		Target:     rl.NewVector3(0, 0, 0),
@@ -569,116 +434,77 @@ func main() {
 		Projection: rl.CameraPerspective,
 	}
 
-	// Carrega os shaders avançados
-	depthShader := rl.LoadShaderFromMemory(depthVertexShaderSource, depthFragmentShaderSource)
-	defer rl.UnloadShader(depthShader)
+	// Salvamos o estado normal da câmera para restaurá-lo depois do modo Top View.
+	normalCamera := camera
 
-	mainShader := rl.LoadShaderFromMemory(mainVertexShaderSource, mainFragmentShaderSource)
-	defer rl.UnloadShader(mainShader)
+	// Variável que guarda o modo de câmera para os controles normais (Orbital ou Livre)
+	currentCameraMode := CameraOrbital
 
-	postProcessShader := rl.LoadShaderFromMemory(postProcessVertexShaderSource, postProcessFragmentShaderSource)
-	defer rl.UnloadShader(postProcessShader)
+	// Variável que indica se o modo Top View está ativo
+	topViewEnabled := false
 
-	// Carrega os modelos (esfera e anel para Saturn)
-	sphereMesh := rl.GenMeshSphere(1.0, 32, 32)
-	sphereModel := rl.LoadModelFromMesh(sphereMesh)
-	// Inicialmente atribuímos o mainShader, mas ele será sobrescrito nas chamadas de desenho
-	sphereModel.Materials.Shader = mainShader
-	defer rl.UnloadModel(sphereModel)
-
+	// Gera o mesh e o modelo para o anel de Saturno
 	ringMesh := generateRingMesh(1.5, 2.0, 100)
 	ringModel := rl.LoadModelFromMesh(ringMesh)
-	ringModel.Materials.Shader = mainShader
 	defer rl.UnloadModel(ringModel)
 
-	// Cria render textures
-	sceneRenderTexture := rl.LoadRenderTexture(screenWidth, screenHeight)
-	defer rl.UnloadRenderTexture(sceneRenderTexture)
-	shadowMapSize := int32(1024)
-	depthRenderTexture := rl.LoadRenderTexture(shadowMapSize, shadowMapSize)
-	defer rl.UnloadRenderTexture(depthRenderTexture)
-
-	// Define a câmera da luz (para shadow mapping)
-	// Usamos o Sol (posição 0,0,0) como luz direcional; projeção ortográfica
-	lightPos := rl.NewVector3(0, 0, 0)
-	lightTarget := rl.NewVector3(0, 0, 1)
-	lightUp := rl.NewVector3(0, 1, 0)
-	lightView := rl.MatrixLookAt(lightPos, lightTarget, lightUp)
-	lightProj := rl.MatrixOrtho(-500, 500, -500, 500, 1, 1000)
-	lightSpaceMatrix := rl.MatrixMultiply(lightProj, lightView)
-
-	// Envia a matriz para o mainShader usando SetShaderValueMatrix
-	rl.SetShaderValueMatrix(mainShader, rl.GetShaderLocation(mainShader, "lightSpaceMatrix"), lightSpaceMatrix)
-	// Envia a posição da luz
-	rl.SetShaderValue(mainShader, rl.GetShaderLocation(mainShader, "lightPos"), []float32{lightPos.X, lightPos.Y, lightPos.Z}, rl.ShaderUniformVec3)
-
-	// Cria a simulação
 	sim := NewSimulation()
 
-	// Define a variável de exposição (HDR)
-	exposure := float32(1.0)
-	rl.SetShaderValue(postProcessShader, rl.GetShaderLocation(postProcessShader, "exposure"), []float32{exposure}, rl.ShaderUniformFloat)
-
-	// Loop principal com múltiplos passes
 	for !rl.WindowShouldClose() {
-		// Atualiza a simulação e a câmera (movimento orbital suave)
 		sim.Update()
-		camRadius := float32(600)
-		camera.Position.X = camRadius * float32(math.Cos(sim.CamAngle))
-		camera.Position.Z = camRadius * float32(math.Sin(sim.CamAngle))
-		camera.Target = rl.NewVector3(0, 0, 0)
 
-		// PASS 1: Renderiza o shadow map (depthRenderTexture) usando depthShader
-		rl.BeginTextureMode(depthRenderTexture)
-		rl.ClearBackground(rl.White)
-		lightCam := rl.Camera3D{
-			Position:   lightPos,
-			Target:     lightTarget,
-			Up:         lightUp,
-			Fovy:       90,
-			Projection: rl.CameraOrthographic,
+		// Se a tecla P for pressionada, alterna o modo Top View
+		if rl.IsKeyPressed(rl.KeyP) {
+			if !topViewEnabled {
+				// Ativa o modo Top View: salva o estado da câmera normal e configura a visão de cima
+				normalCamera = camera
+				camera.Position = rl.NewVector3(0, 800, 0)
+				camera.Target = rl.NewVector3(0, 0, 0)
+				// Define um vetor Up que não interfira com a direção de visão
+				camera.Up = rl.NewVector3(0, 0, -1)
+				camera.Projection = rl.CameraPerspective
+				camera.Fovy = 45
+				topViewEnabled = true
+			} else {
+				// Desativa o modo Top View: restaura o estado salvo da câmera normal
+				topViewEnabled = false
+				camera = normalCamera
+			}
 		}
-		rl.BeginMode3D(lightCam)
-		sim.DrawScene(sphereModel, ringModel, depthShader)
-		rl.EndMode3D()
-		rl.EndTextureMode()
 
-		// PASS 2: Renderiza a cena para sceneRenderTexture usando mainShader
-		rl.BeginTextureMode(sceneRenderTexture)
-		rl.ClearBackground(rl.Black)
-		rl.BeginMode3D(camera)
+		// Se não estiver no modo Top View, atualiza a câmera com base nas entradas do usuário
+		if !topViewEnabled {
+			if rl.IsKeyPressed(rl.KeyOne) {
+				currentCameraMode = CameraOrbital
+			}
+			if rl.IsKeyPressed(rl.KeyTwo) {
+				currentCameraMode = CameraFree
+			}
+			rl.UpdateCamera(&camera, rl.CameraMode(currentCameraMode))
+		}
 
-		// Atualiza os uniformes do mainShader
-		rl.SetShaderValue(mainShader, rl.GetShaderLocation(mainShader, "viewPos"),
-			[]float32{camera.Position.X, camera.Position.Y, camera.Position.Z}, rl.ShaderUniformVec3)
-		rl.SetShaderValue(mainShader, rl.GetShaderLocation(mainShader, "lightColor"),
-			[]float32{1.0, 1.0, 1.0}, rl.ShaderUniformVec3)
-		rl.SetShaderValue(mainShader, rl.GetShaderLocation(mainShader, "ambient"),
-			[]float32{0.3, 0.3, 0.3}, rl.ShaderUniformVec3)
-		rl.SetShaderValue(mainShader, rl.GetShaderLocation(mainShader, "shininess"),
-			[]float32{32.0}, rl.ShaderUniformFloat)
-
-		// Envia o shadow map para o mainShader
-		rl.SetShaderValueTexture(mainShader, rl.GetShaderLocation(mainShader, "shadowMap"), depthRenderTexture.Texture)
-
-		// Desenha a cena
-		sim.DrawScene(sphereModel, ringModel, mainShader)
-
-		rl.EndMode3D()
-		rl.EndTextureMode()
-
-		// PASS 3: Desenha na tela com pós-processamento (HDR/tone mapping)
 		rl.BeginDrawing()
 		rl.ClearBackground(rl.Black)
 
-		rl.BeginShaderMode(postProcessShader)
-		texRec := rl.NewRectangle(0, 0,
-			float32(sceneRenderTexture.Texture.Width),
-			float32(-sceneRenderTexture.Texture.Height)) // Altura negativa para flip vertical
-		rl.DrawTextureRec(sceneRenderTexture.Texture, texRec, rl.NewVector2(0, 0), rl.White)
-		rl.EndShaderMode()
+		rl.BeginMode3D(camera)
+		sim.Draw3D(ringModel)
+		rl.EndMode3D()
 
-		rl.DrawText("Simulação 3D Grandiosa com Shadow Mapping, HDR e Bloom (simplificado)", 10, 10, 20, rl.White)
+		// Exibe informações na tela
+		modeText := ""
+		if topViewEnabled {
+			modeText = "Top View"
+		} else {
+			if currentCameraMode == CameraOrbital {
+				modeText = "Orbital"
+			} else {
+				modeText = "Livre"
+			}
+		}
+		rl.DrawText("Simulação 3D Realista do Sistema Solar", 10, 10, 20, rl.White)
+		rl.DrawText("Modo da Câmera: "+modeText, 10, 40, 20, rl.White)
+		rl.DrawText("Pressione 1: Orbital | 2: Livre (modo normal)", 10, 70, 20, rl.White)
+		rl.DrawText("Pressione P: Alternar Top View", 10, 100, 20, rl.White)
 
 		rl.EndDrawing()
 	}
