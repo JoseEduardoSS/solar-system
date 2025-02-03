@@ -237,7 +237,10 @@ func NewSimulation() *Simulation {
 
 	// Inicializa o cometa com posição e direção aleatórias (na periferia)
 	resetComet(sim)
+	// Define o comprimento máximo do rastro do cometa
+	sim.Comet.TailMaxLength = 20
 
+	// Semente para números aleatórios
 	rand.Seed(time.Now().UnixNano())
 	return sim
 }
@@ -348,15 +351,10 @@ func (sim *Simulation) Update() {
 	}
 }
 
-// Desenha as órbitas dos planetas (no plano XZ)
-func (sim *Simulation) DrawOrbitPaths() {
-	center := rl.NewVector3(0, 0, 0)
-	for _, p := range sim.Planets {
-		rl.DrawCircle3D(center, float32(p.OrbitRadius), rl.NewVector3(1, 0, 0), 90, rl.LightGray)
-	}
-}
+// (Função auxiliar removida: DrawOrbitPaths)
+// As linhas das órbitas foram retiradas conforme solicitado.
 
-// Função auxiliar para desenhar uma esfera (usando a função nativa)
+// Função auxiliar para desenhar uma esfera
 func drawSphere(pos rl.Vector3, radius float32, col rl.Color) {
 	rl.DrawSphere(pos, radius, col)
 }
@@ -431,8 +429,7 @@ func (sim *Simulation) Draw3D(ringModel rl.Model) {
 	// Desenha o Sol
 	drawSphere(rl.NewVector3(0, 0, 0), sim.SunRadius, rl.Yellow)
 
-	// Desenha as órbitas dos planetas
-	sim.DrawOrbitPaths()
+	// OBS.: As órbitas dos planetas foram removidas conforme solicitado.
 
 	// Desenha os planetas e suas luas
 	for _, p := range sim.Planets {
@@ -502,12 +499,19 @@ func (sim *Simulation) Draw3D(ringModel rl.Model) {
 }
 
 func main() {
-	// Configurações da janela
-	screenWidth := int32(1280)
-	screenHeight := int32(720)
+	// Define a flag para full screen antes de inicializar a janela
+	rl.SetConfigFlags(rl.FlagFullscreenMode)
+
+	// Obtém a resolução do monitor principal para definir a janela full screen
+	screenWidth := int32(rl.GetMonitorWidth(0))
+	screenHeight := int32(rl.GetMonitorHeight(0))
 	rl.InitWindow(screenWidth, screenHeight, "Simulação 3D Realista do Sistema Solar - Câmeras, Física & Colisões")
 	defer rl.CloseWindow()
 	rl.SetTargetFPS(60)
+
+	// Carrega a imagem de fundo (certifique-se de que o arquivo "space.jpg" esteja na pasta "resources")
+	backgroundTexture := rl.LoadTexture("space.jpg")
+	defer rl.UnloadTexture(backgroundTexture)
 
 	// Cria a câmera 3D com parâmetros iniciais (modo normal)
 	camera := rl.Camera3D{
@@ -566,7 +570,18 @@ func main() {
 		}
 
 		rl.BeginDrawing()
+		// Limpa o frame
 		rl.ClearBackground(rl.Black)
+
+		// Desenha a imagem de fundo esticada para cobrir toda a tela
+		rl.DrawTexturePro(
+			backgroundTexture,
+			rl.NewRectangle(0, 0, float32(backgroundTexture.Width), float32(backgroundTexture.Height)),
+			rl.NewRectangle(0, 0, float32(screenWidth), float32(screenHeight)),
+			rl.NewVector2(0, 0),
+			0,
+			rl.White,
+		)
 
 		rl.BeginMode3D(camera)
 		sim.Draw3D(ringModel)
